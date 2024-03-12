@@ -9,7 +9,7 @@ base de datos.
 
 ---
 
-## Dependencias
+## Dependencias iniciales
 
 ````xml
 <!--Spring Boot 3.2.3-->
@@ -338,4 +338,148 @@ Si detenemos la aplicación, el contenedor en Docker quedará en `exited`:
 $ docker container ls -a
 CONTAINER ID   IMAGE                  COMMAND                  CREATED         STATUS                     PORTS     NAMES
 2046394862cf   postgres:15.2-alpine   "docker-entrypoint.s…"   5 minutes ago   Exited (0) 4 seconds ago             postgres
+````
+
+## Creando PostController
+
+Antes de crear el `PostController` crearemos una clase personalizada de excepción `PostNotFoundException`:
+
+````java
+
+@ResponseStatus(HttpStatus.NOT_FOUND)
+public class PostNotFoundException extends RuntimeException {
+
+}
+````
+
+La clase anterior, la usaremos para lanzar cuando no se encuentre el recurso solicitado.
+
+Ahora, creamos los endpoints:
+
+````java
+
+@RestController
+@RequestMapping(path = "/api/v1/posts")
+public class PostController {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PostDataLoader.class);
+    private final PostRepository postRepository;
+
+    public PostController(PostRepository postRepository) {
+        this.postRepository = postRepository;
+    }
+
+    @GetMapping
+    public ResponseEntity<List<Post>> findAllPosts() {
+        return ResponseEntity.ok(this.postRepository.findAll());
+    }
+
+    @GetMapping(path = "/{id}")
+    public ResponseEntity<Post> findById(@PathVariable Integer id) {
+        return ResponseEntity.ok(this.postRepository.findById(id).orElseThrow(PostNotFoundException::new));
+    }
+
+    @PostMapping
+    public ResponseEntity<Post> savePost(@Valid @RequestBody Post post) {
+        Post postDB = this.postRepository.save(post);
+        URI uri = URI.create("/api/v1/posts/" + postDB.id());
+        return ResponseEntity.created(uri).body(postDB);
+    }
+
+    @PutMapping(path = "/{id}")
+    public ResponseEntity<Post> updatePost(@PathVariable Integer id, @RequestBody Post post) {
+        return this.postRepository.findById(id)
+                .map(postDB -> {
+
+                    Post updatedPost = new Post(postDB.id(),
+                            postDB.userId(),
+                            postDB.title(),
+                            postDB.body(),
+                            postDB.version());
+                    return ResponseEntity.ok(this.postRepository.save(updatedPost));
+                })
+                .orElseThrow(PostNotFoundException::new);
+    }
+
+    @DeleteMapping(path = "/{id}")
+    public ResponseEntity<Void> deletePost(@PathVariable Integer id) {
+        return this.postRepository.findById(id)
+                .map(postDB -> {
+                    this.postRepository.deleteById(postDB.id());
+                    return new ResponseEntity<Void>(HttpStatus.NO_CONTENT);
+                })
+                .orElseThrow(PostNotFoundException::new);
+    }
+
+}
+````
+
+## Levantando aplicación y probando endpoints
+
+Recordemos que como tenemos la dependencia de `Docker Compose Support`, la conexión a la base de datos, lo hará
+automáticamente nuestra aplicación de `Spring Boot`, es decir, no es necesario agregar en el `application.yml`
+las configuraciones que siempre hacemos.
+
+Una vez levantado la aplicación, realizamos algunas peticiones para probar el funcionamiento correcto de los endpoints:
+
+````bash
+$ curl -v http://localhost:8080/api/v1/posts | jq
+
+>
+< HTTP/1.1 200
+<
+[
+  {
+    "id": 1,
+    "userId": 1,
+    "title": "sunt aut facere repellat provident occaecati excepturi optio reprehenderit",
+    "body": "quia et suscipit\nsuscipit recusandae consequuntur expedita et cum\nreprehenderit molestiae ut ut quas totam\nnostrum rerum est autem sunt rem eveniet architecto",
+    "version": 0
+  },
+  {
+    "id": 2,
+    "userId": 1,
+    "title": "qui est esse",
+    "body": "est rerum tempore vitae\nsequi sint nihil reprehenderit dolor beatae ea dolores neque\nfugiat blanditiis voluptate porro vel nihil molestiae ut reiciendis\nqui aperiam non debitis possimus qui neque nisi nulla",
+    "version": 0
+  },
+  {...}
+]
+````
+
+````bash
+$ curl -v http://localhost:8080/api/v1/posts/1 | jq
+
+>
+< HTTP/1.1 200
+<
+{
+  "id": 1,
+  "userId": 1,
+  "title": "sunt aut facere repellat provident occaecati excepturi optio reprehenderit",
+  "body": "quia et suscipit\nsuscipit recusandae consequuntur expedita et cum\nreprehenderit molestiae ut ut quas totam\nnostrum rerum est autem sunt rem eveniet architecto",
+  "version": 0
+}
+````
+
+````bash
+$ curl -v -X DELETE http://localhost:8080/api/v1/posts/1 | jq
+
+>
+< HTTP/1.1 204
+<
+````
+
+````bash
+$ curl -v -X DELETE http://localhost:8080/api/v1/posts/1 | jq
+
+>
+< HTTP/1.1 404
+<
+{
+  "timestamp": "2024-03-12T00:28:52.535+00:00",
+  "status": 404,
+  "error": "Not Found",
+  "path": "/api/v1/posts/1"
+}
 ````
