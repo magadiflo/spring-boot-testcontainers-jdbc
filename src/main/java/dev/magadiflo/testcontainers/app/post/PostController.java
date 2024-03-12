@@ -44,10 +44,10 @@ public class PostController {
                 .map(postDB -> {
 
                     Post updatedPost = new Post(postDB.id(),
-                            postDB.userId(),
-                            postDB.title(),
-                            postDB.body(),
-                            postDB.version());
+                            post.userId(),
+                            post.title(),
+                            post.body(),
+                            post.version());
                     return ResponseEntity.ok(this.postRepository.save(updatedPost));
                 })
                 .orElseThrow(PostNotFoundException::new);

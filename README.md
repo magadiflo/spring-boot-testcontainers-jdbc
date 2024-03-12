@@ -392,10 +392,10 @@ public class PostController {
                 .map(postDB -> {
 
                     Post updatedPost = new Post(postDB.id(),
-                            postDB.userId(),
-                            postDB.title(),
-                            postDB.body(),
-                            postDB.version());
+                            post.userId(),
+                            post.title(),
+                            post.body(),
+                            post.version());
                     return ResponseEntity.ok(this.postRepository.save(updatedPost));
                 })
                 .orElseThrow(PostNotFoundException::new);
@@ -483,3 +483,321 @@ $ curl -v -X DELETE http://localhost:8080/api/v1/posts/1 | jq
   "path": "/api/v1/posts/1"
 }
 ````
+
+---
+
+# Trabajando con Testcontainers
+
+---
+
+## Dependencias adicionales
+
+Utilizamos la web de `Spring Initializr` para obtener la dependencia de `testcontainers`. Teniendo las dependencias
+iniciales, agregamos la dependencia `Testcontainers`, al hacerlo, automáticamente se agregarán dos dependencias
+adicionales: `junit-jupiter` y `postgresql`, ambos pertenecientes al **groupId** `org.testcontainers`.
+
+Ojo, es importante que las dependencias iniciales estén en la web al momento de agregar la dependencia `Testcontainers`,
+o en su defecto que esté presente la dependencia del driver de `PostgreSQL`, eso porque al agregar el `Testcontainers`
+en automático detectará el driver de postgres para generar su dependencia de testcontainer.
+
+````xml
+
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-testcontainers</artifactId>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+````
+
+## Método personalizado en PostRepository
+
+Para ejemplificar este tutorial, crearemos un método personalizado en el `PostRepository`:
+
+````java
+public interface PostRepository extends ListCrudRepository<Post, Integer> {
+    Post findByTitle(String title);
+}
+````
+
+Por lo general, cuando se realizan pruebas, es recomendable hacer dichas pruebas sobre métodos personalizados que
+hayamos creado, dado que los métodos que vienen ya construidos en Spring Data, están probados y sabemos que sí
+funcionan.
+
+## Pruebas al repository
+
+En este apartado escribiremos las pruebas para el repositorio `PostRepository`, para ello nos situamos dentro de
+dicha interfaz y presionamos `Ctrl + Shift + T` y damos en `Create New Test...`.
+
+````java
+
+@Testcontainers
+@DataJdbcTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+class PostRepositoryTest {
+
+    @Container
+    @ServiceConnection
+    private static final PostgreSQLContainer<?> POSTGRES_CONTAINER = new PostgreSQLContainer<>("postgres:15.2-alpine");
+
+    @Autowired
+    private PostRepository postRepository;
+
+    @BeforeEach
+    void setUp() {
+        List<Post> posts = List.of(
+                new Post(1, 1, "Hello World!", "This is my first post", null),
+                new Post(2, 1, "Hi", "How are you?", null)
+        );
+        this.postRepository.saveAll(posts);
+    }
+
+    @Test
+    void connectionEstablished() {
+        Assertions.assertTrue(POSTGRES_CONTAINER.isCreated());
+        Assertions.assertTrue(POSTGRES_CONTAINER.isRunning());
+    }
+
+    @Test
+    void shouldReturnPostByTitle() {
+        Post post = this.postRepository.findByTitle("Hello World!");
+        Assertions.assertNotNull(post);
+    }
+
+    @Test
+    void shouldDeletePostById() {
+        int postId = 1;
+
+        Optional<Post> postOptional = this.postRepository.findById(postId);
+        Assertions.assertTrue(postOptional.isPresent());
+
+        this.postRepository.deleteById(postId);
+
+        postOptional = this.postRepository.findById(postId);
+        Assertions.assertTrue(postOptional.isEmpty());
+    }
+
+    @Test
+    void shouldDeleteAllPosts() {
+        this.postRepository.deleteAll();
+        Assertions.assertEquals(0, this.postRepository.count());
+    }
+}
+````
+
+**DONDE**
+
+- `@Testcontainers` es una extensión de `JUnit Jupiter` para activar el inicio y la parada automáticos de los
+  contenedores utilizados en un caso de prueba. La extensión `@Testcontainers` encuentra todos los campos anotados
+  con `@Container` y llama a sus métodos de ciclo de vida de contenedor. **Los contenedores declarados como campos
+  estáticos se compartirán entre los métodos de prueba. Se iniciarán solo una vez antes de ejecutar cualquier método
+  de prueba y se detendrán después de que se haya ejecutado el último método de prueba.** Los contenedores declarados
+  como campos de instancia se iniciarán y detendrán para cada método de prueba.
+
+
+- `@DataJdbcTest`, anotación que se puede utilizar para una prueba de Data JDBC que se centra únicamente en los
+  componentes de `Data JDBC`.
+  El uso de esta anotación deshabilitará la configuración automática completa, buscará subclases
+  de `AbstractJdbcConfiguration` y aplicará solo la configuración relevante a las pruebas de Data JDBC.
+  **De forma predeterminada, las pruebas anotadas con `@DataJdbcTest` son transaccionales y se revierten al final de
+  cada prueba.** También utilizan una base de datos integrada en memoria (que reemplaza cualquier fuente de datos
+  explícita o generalmente configurada automáticamente). **La anotación `@AutoConfigureTestDatabase` se puede utilizar
+  para anular estas configuraciones.**
+  Si desea cargar la configuración completa de su aplicación, pero utiliza una base de datos integrada, debe
+  considerar `@SpringBootTest` combinado con `@AutoConfigureTestDatabase` en lugar de esta anotación.
+
+
+- `@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)`: Como usamos la base de
+  datos `POSTGRES de TestContainers`, tenemos que decirle al framework de test de Spring que no debería intentar
+  reemplazar nuestra base de datos.
+
+    - `@AutoConfigureTestDatabase`, anotación que se puede aplicar a una clase de prueba para **configurar una base de
+      datos de prueba** para usar en lugar del DataSource definido por la aplicación o configurado automáticamente. En
+      el caso de varios beans DataSource, solo se considera @Primary DataSource.
+    - `AutoConfigureTestDatabase.Replace.NONE`, no reemplace la fuente de datos predeterminada de la aplicación.
+
+
+- La anotación `@Container` se usa junto con la anotación `@Testcontainers` para marcar los contenedores que deben ser
+  administrados por la extensión `@Testcontainers`.
+
+
+- `PostgreSQLContainer`, Implementación de Testcontainers para PostgreSQL. Imagen compatible: postgres Puertos
+  expuestos: 5432
+
+
+- `@ServiceConnection`, anotación utilizada para indicar que un campo o método es un `ContainerConnectionSource` que
+  proporciona un servicio al que se puede conectar.
+
+Con el siguiente método de test podemos comprobar que nuestro contendor de postgres se ha creado y está ejecutándose:
+
+````java
+
+@Test
+void connectionEstablished() {
+    Assertions.assertTrue(POSTGRES_CONTAINER.isCreated());
+    Assertions.assertTrue(POSTGRES_CONTAINER.isRunning());
+}
+````
+
+Al ejecutar todos los test de `PostRepositoryTest` vemos el siguiente resultado:
+
+![post repository test](./assets/01.post-repository-test.png)
+
+## Pruebas al controlador
+
+En este apartado escribiremos las pruebas para el controlador `PostController`, para ello nos situamos dentro de
+dicha clase y presionamos `Ctrl + Shift + T` y damos en `Create New Test...`.
+
+**NOTA**
+
+> Si estamos pensando en usar el nuevo `RestClient`, por ahora no se puede usar en entornos de pruebas, así que
+> usaremos o el tradicional `TestRestTemplate` o el `WebClientTest`.
+
+````java
+/**
+ * Prueba de integración
+ */
+@Testcontainers
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class PostControllerTest {
+
+    @Container
+    @ServiceConnection
+    private static final PostgreSQLContainer<?> POSTGRES_CONTAINER = new PostgreSQLContainer<>("postgres:15.2-alpine");
+
+    @Autowired
+    private TestRestTemplate restTemplate;
+
+    @Test
+    void connectionEstablished() {
+        Assertions.assertTrue(POSTGRES_CONTAINER.isCreated());
+        Assertions.assertTrue(POSTGRES_CONTAINER.isRunning());
+    }
+
+    @Test
+    void shouldFindAllPosts() {
+        Post[] posts = this.restTemplate.getForObject("/api/v1/posts", Post[].class);
+        Assertions.assertEquals(100, posts.length);
+    }
+
+    @Test
+    void shouldFindPostWhenValidPostId() {
+        ResponseEntity<Post> response = this.restTemplate.exchange("/api/v1/posts/{id}", HttpMethod.GET, null, Post.class, Collections.singletonMap("id", 1));
+        Assertions.assertEquals(HttpStatus.OK, response.getStatusCode());
+        Assertions.assertNotNull(response.getBody());
+    }
+
+    @Test
+    void shouldThrowNotFoundWhenInvalidPostId() {
+        ResponseEntity<Post> response = this.restTemplate.exchange("/api/v1/posts/{id}", HttpMethod.GET, null, Post.class, Collections.singletonMap("id", 500));
+        Assertions.assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+    }
+
+    @Test
+    void shouldCreateNewPostWhenPostIsValid() {
+        Post post = new Post(101, 1, "Post 101", "Body 101", null);
+
+        ResponseEntity<Post> response = this.restTemplate.exchange("/api/v1/posts", HttpMethod.POST, new HttpEntity<>(post), Post.class);
+
+        Assertions.assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        Assertions.assertNotNull(response.getBody());
+        Assertions.assertEquals(101, response.getBody().id());
+        Assertions.assertEquals(1, response.getBody().userId());
+        Assertions.assertEquals("Post 101", response.getBody().title());
+        Assertions.assertEquals("Body 101", response.getBody().body());
+    }
+
+    @Test
+    void shouldNotCreateNewPostWhenValidationFails() {
+        Post post = new Post(101, 1, " ", null, null);
+
+        ResponseEntity<Post> response = this.restTemplate.exchange("/api/v1/posts", HttpMethod.POST, new HttpEntity<>(post), Post.class);
+
+        Assertions.assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void shouldUpdatePostWhenPostIsValid() {
+        ResponseEntity<Post> responseGet = this.restTemplate.exchange("/api/v1/posts/{id}", HttpMethod.GET, null, Post.class, Collections.singletonMap("id", 99));
+        Assertions.assertEquals(HttpStatus.OK, responseGet.getStatusCode());
+        Assertions.assertNotNull(responseGet.getBody());
+
+        Post postToUpdate = new Post(null, responseGet.getBody().userId(), "New post title #1", "New post body #1", responseGet.getBody().version());
+        ResponseEntity<Post> responsePut = this.restTemplate.exchange("/api/v1/posts/{id}", HttpMethod.PUT, new HttpEntity<>(postToUpdate), Post.class, Collections.singletonMap("id", 99));
+
+        Assertions.assertEquals(HttpStatus.OK, responsePut.getStatusCode());
+        Assertions.assertNotNull(responsePut.getBody());
+
+        Assertions.assertEquals(99, responsePut.getBody().id());
+        Assertions.assertEquals(postToUpdate.title(), responsePut.getBody().title());
+        Assertions.assertEquals(postToUpdate.body(), responsePut.getBody().body());
+        Assertions.assertEquals(postToUpdate.version() + 1, responsePut.getBody().version());
+    }
+
+    @Test
+    void shouldDeleteWithValidId() {
+        ResponseEntity<Void> response = this.restTemplate.exchange("/api/v1/posts/{id}", HttpMethod.DELETE, null, Void.class, Collections.singletonMap("id", 80));
+        Assertions.assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
+    }
+}
+````
+
+**DONDE**
+
+- `@Testcontainers` es una extensión de `JUnit Jupiter` para activar el inicio y la parada automáticos de los
+  contenedores utilizados en un caso de prueba. La extensión `@Testcontainers` encuentra todos los campos anotados
+  con `@Container` y llama a sus métodos de ciclo de vida de contenedor. **Los contenedores declarados como campos
+  estáticos se compartirán entre los métodos de prueba. Se iniciarán solo una vez antes de ejecutar cualquier método
+  de prueba y se detendrán después de que se haya ejecutado el último método de prueba.** Los contenedores declarados
+  como campos de instancia se iniciarán y detendrán para cada método de prueba.
+
+
+- `SpringBootTest`, anotación que se puede especificar en una clase de prueba que ejecuta pruebas basadas en Spring
+  Boot. Proporciona las siguientes características además del marco Spring TestContext normal:
+    - Utiliza SpringBootContextLoader como ContextLoader predeterminado cuando no se define ningún
+      @ContextConfiguration(loader=...) específico.
+    - Busca automáticamente @SpringBootConfiguration cuando no se utiliza @Configuration anidada y no se especifican
+      clases explícitas.
+    - Permite definir propiedades de entorno personalizadas utilizando el atributo de propiedades.
+    - Permite definir argumentos de la aplicación utilizando el atributo args.
+    - Proporciona soporte para diferentes modos de entorno web, incluida la capacidad de iniciar un servidor web en
+      pleno funcionamiento escuchando en un puerto definido o aleatorio.
+    - Registra un bean `TestRestTemplate` y/o `WebTestClient` para su uso en pruebas web que utilizan un servidor web en
+      pleno funcionamiento.
+
+
+- `SpringBootTest.WebEnvironment.RANDOM_PORT`, Crea un contexto de aplicación web (reactivo o basado en servlet) y
+  establece una propiedad de entorno server.port=0 (que normalmente activa la escucha en un puerto aleatorio). A menudo
+  se utiliza junto con un campo inyectado `@LocalServerPort` en la prueba.
+
+
+- La anotación `@Container` se usa junto con la anotación `@Testcontainers` para marcar los contenedores que deben ser
+  administrados por la extensión `@Testcontainers`.
+
+
+- `PostgreSQLContainer`, Implementación de Testcontainers para PostgreSQL. Imagen compatible: postgres Puertos
+  expuestos: 5432
+
+
+- `@ServiceConnection`, anotación utilizada para indicar que un campo o método es un `ContainerConnectionSource` que
+  proporciona un servicio al que se puede conectar.
+
+Al ejecutar todos los métodos de prueba obtenemos el siguiente resultado:
+
+![post controller test](./assets/02.post-controller-test.png)
+
+Como nuestro `POSTGRES_CONTAINER` es compartido entre todos los métodos test, la ejecución del
+test `shouldFindAllPosts` está siendo afectado por la ejecución del método `shouldCreateNewPostWhenPostIsValid`, ya que
+al crear un nuevo post el total de elementos ya no serían 100 sino 101, por esa razón es que falla. Ahora, **intenté
+utilizar la anotación `@Transactional` y `@Rollback` pero no funcionó (lo mismo ocurrió en el video tutorial).** 
