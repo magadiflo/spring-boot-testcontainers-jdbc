@@ -1,1 +1,7 @@
-spring.application.name=spring-boot-testcontainers-jdbc
+spring:
+  application:
+    name: spring-boot-testcontainers-jdbc
+
+  sql:
+    init:
+      mode: always
